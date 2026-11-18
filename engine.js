@@ -467,6 +467,26 @@ export class Engine {
     });
   }
 
+  /**
+   * Déplace et/ou redimensionne un texte existant : rédacte l'ancien emplacement
+   * (glyphes d'origine) puis redessine le texte dans `rect` [L,T,R,B] (origine haut-gauche).
+   * opts: {text, family, size, color, bold, italic, align, fontKey, pitch, justify}
+   */
+  async placeText(pageIdx, unit, rect, opts = {}) {
+    const text = (opts.text ?? (unit.paras ? unit.paras.join("\n") : "")).replace(/\s+$/, "");
+    this._redactRects(pageIdx, this._redactionRectsFor(unit), { text: mupdf.PDFPage.REDACT_TEXT_REMOVE });
+    if (!text.trim()) return { fidelity: "removed" };
+    const size = opts.size ?? unit.style.size;
+    const [L, T, R] = rect;
+    return this.drawText(pageIdx, {
+      ...opts, text, size,
+      x: L, y: T + size * 0.85,
+      width: Math.max(20, R - L),
+      boxLeft: L, boxRight: R,
+      pitch: opts.pitch ?? size * 1.2,
+    });
+  }
+
   _resolveFont(o) {
     const name = o.fontKey || (o.keepFont !== false ? o.origFont : null);
     if (name) {

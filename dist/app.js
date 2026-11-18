@@ -333,7 +333,7 @@ function updateChrome() {
   document.querySelectorAll("#tools button").forEach((b) => { b.classList.toggle("on", b.dataset.tool === S.tool); b.disabled = S.busy; });
   $("#zin").disabled = $("#zout").disabled = $("#fit").disabled = S.busy;
   ov.className = "t-" + S.tool;
-  const labels = { select: "Modifier un élément", addtext: "Cliquez sur la page pour ajouter du texte", addimage: "Choisissez une image à insérer", patch: "Tracez la zone de texte à retoucher" };
+  const labels = { select: "Modifier un élément · poignée ✥ pour déplacer le texte", addtext: "Cliquez pour placer le texte, puis saisissez-le", addimage: "Choisissez une image, ou glissez-déposez-la sur la page", patch: "Tracez un rectangle sur le texte aplati, puis corrigez l'OCR" };
   $("#toolStatus").textContent = S.count ? labels[S.tool] : "Prêt à modifier";
   if (S.count) {
     const locked = S.info?.encryption && S.info.encryption !== "None" ? " · chiffré" : "";
@@ -405,10 +405,10 @@ function drawSelection(im) {
 
 // ---------- éditeur de texte ----------
 function newUnit(x, y) {
-  const size = 12;
+  const size = 12, width = 320;
   return {
-    id: -1, isNew: true, bbox: [x, y - size, x + 160, y + size * 0.4], x, y, pitch: size * 1.2, align: "left", justify: false,
-    multi: false, width: 160, paras: [""], mixed: false,
+    id: -1, isNew: true, bbox: [x, y - size, x + width, y + size * 0.4], x, y, pitch: size * 1.2, align: "left", justify: false,
+    multi: false, width, paras: [""], mixed: false,
     style: { family: "serif", size, color: [0, 0, 0], bold: false, italic: false, fontKey: null },
   };
 }
@@ -498,79 +498,82 @@ function startRubber(e, onDone) {
   addEventListener("pointermove", mv); addEventListener("pointerup", up);
 }
 
-// Affiche un rectangle redimensionnable (8 poignées) + barre d'actions. L'utilisateur ajuste la forme, puis applique.
-function drawPatchSelection(rect) {
-  closeEditor();
-  let cur = rect.slice();
-  const el = document.createElement("div"); el.className = "sel patch-sel"; ov.append(el);
-  const bar = document.createElement("div"); bar.className = "patch-actions";
-  bar.innerHTML = `<button class="primary" data-act="apply" title="Appliquer la retouche (Ctrl+Entrée)">✓ Appliquer</button><button data-act="cancel" title="Annuler (Échap)">✕ Annuler</button>`;
-  ov.append(bar);
+// ---------- cadre de manipulation directe du texte (façon Photoshop) ----------
+const edRect = () => (S.ed.bg ? S.ed.bg.rect : S.ed.unit.bbox);
+const setEdRect = (r) => { if (S.ed.bg) S.ed.bg.rect = r; else S.ed.unit.bbox = r; };
+const clampSize = (s) => Math.max(3, Math.min(200, Math.round(s * 10) / 10));
 
-  const MIN = 8;
-  const clamp = (r) => {
-    let [a, b, c, d] = r;
-    const W = S.size.w, H = S.size.h;
-    a = Math.max(0, Math.min(W - MIN, a)); c = Math.max(a + MIN, Math.min(W, Math.max(c, a + MIN)));
-    b = Math.max(0, Math.min(H - MIN, b)); d = Math.max(b + MIN, Math.min(H, Math.max(d, b + MIN)));
-    return [a, b, c, d];
-  };
-  const place = () => {
-    box(el, cur);
-    const z = S.zoom, cx = (cur[0] + cur[2]) / 2 * z;
-    let top = cur[1] * z - 46; if (top < 4) top = cur[3] * z + 8;
-    bar.style.left = cx + "px"; bar.style.top = top + "px";
-  };
-  place();
+function placeTextFrame() {
+  const ed = S.ed;
+  if (!ed || !ed.frame) return;
+  const r = edRect(), z = S.zoom;
+  const thPt = ed.ta ? ed.ta.offsetHeight / z : 0;
+  const bottom = Math.max(r[3], r[1] + thPt);
+  box(ed.frame, [r[0], r[1], r[2], bottom], 2);
+}
 
-  const startDrag = (e, mode) => {
-    if (e.button !== undefined && e.button !== 0) return;
+function clearTextFrame() { if (S.ed && S.ed.frame) { S.ed.frame.remove(); S.ed.frame = null; } }
+
+function mountTextFrame() {
+  clearTextFrame();
+  const ed = S.ed;
+  const el = document.createElement("div");
+  el.className = "sel text-frame";
+  const grip = document.createElement("div");
+  grip.className = "tf-grip"; grip.title = "Déplacer le texte"; grip.textContent = "✥";
+  el.append(grip);
+  ov.append(el);
+  ed.frame = el;
+
+  const begin = (e, mode) => {
     e.stopPropagation(); e.preventDefault();
-    const start = ptAt(e), orig = cur.slice();
-    const move = (ev) => {
-      const p = ptAt(ev), dx = p[0] - start[0], dy = p[1] - start[1];
-      let [a, b, c, d] = orig;
+    const x0 = e.clientX, y0 = e.clientY;
+    const rect0 = edRect().slice();
+    const size0 = ed.st.size, w0 = Math.max(1, rect0[2] - rect0[0]);
+    const MINW = 40;
+    const move = (m) => {
+      const dx = (m.clientX - x0) / S.zoom, dy = (m.clientY - y0) / S.zoom;
+      let [a, b, c, d] = rect0;
       if (mode === "move") { a += dx; c += dx; b += dy; d += dy; }
       else {
-        if (mode.includes("w")) a += dx; if (mode.includes("e")) c += dx;
-        if (mode.includes("n")) b += dy; if (mode.includes("s")) d += dy;
+        if (mode.includes("w")) a = rect0[0] + dx;
+        if (mode.includes("e")) c = rect0[2] + dx;
+        if (c - a < MINW) { if (mode.includes("w")) a = rect0[2] - MINW; else c = rect0[0] + MINW; }
+        if (mode.length === 2) { // coins : met à l'échelle la police
+          ed.st.size = clampSize(size0 * ((c - a) / w0));
+          const ps = document.querySelector("#ps"); if (ps) ps.value = +ed.st.size.toFixed(1);
+        }
       }
-      cur = clamp([a, b, c, d]); place();
+      a = Math.max(0, Math.min(S.size.w - 20, a));
+      c = Math.max(a + 20, Math.min(S.size.w, c));
+      b = Math.max(0, b);
+      d = Math.max(b + 8, Math.min(S.size.h, d));
+      setEdRect([a, b, c, d]);
+      styleEditor();
     };
     const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
     addEventListener("pointermove", move); addEventListener("pointerup", up);
   };
 
-  el.onpointerdown = (e) => startDrag(e, "move");
-  const handles = { nw: [0, 0], n: [0.5, 0], ne: [1, 0], e: [1, 0.5], se: [1, 1], s: [0.5, 1], sw: [0, 1], w: [0, 0.5] };
-  for (const [mode, [fx, fy]] of Object.entries(handles)) {
+  grip.onpointerdown = (e) => begin(e, "move");
+  for (const [mode, [fx, fy]] of Object.entries({ nw: [0, 0], ne: [1, 0], e: [1, .5], se: [1, 1], sw: [0, 1], w: [0, .5] })) {
     const h = document.createElement("i");
     Object.assign(h.style, { left: `calc(${fx * 100}% - 7px)`, top: `calc(${fy * 100}% - 7px)`, cursor: mode + "-resize" });
-    h.onpointerdown = (e) => startDrag(e, mode); el.append(h);
+    h.onpointerdown = (e) => begin(e, mode);
+    el.append(h);
   }
-
-  const cleanup = () => {
-    removeEventListener("keydown", onKey, true);
-    el.remove(); bar.remove();
-  };
-  const onKey = (ev) => {
-    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); cleanup(); }
-    else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); ev.stopPropagation(); const r = cur.slice(); cleanup(); applyPatchRect(r); }
-  };
-  addEventListener("keydown", onKey, true);
-
-  bar.querySelector('[data-act="apply"]').onclick = () => { const r = cur.slice(); cleanup(); applyPatchRect(r); };
-  bar.querySelector('[data-act="cancel"]').onclick = () => cleanup();
+  placeTextFrame();
 }
 
 function openEditor(unit, bg = null) {
   closeEditor();
   const st = { ...unit.style, align: unit.align };
   st.fontKey = unit.isNew ? (unit.style.fontKey || null) : (unit.style.fontKey || unit.style.origFont || null);
-  S.ed = { unit, st, bg };
+  const startRect = (bg ? bg.rect : unit.bbox).slice();
+  S.ed = { unit, st, bg, origRect: startRect };
   const ta = document.createElement("textarea"); ta.id = "ed"; ta.value = unit.paras.join("\n");
   S.ed.ta = ta; ov.append(ta);
-  styleEditor(); renderPanel(); ta.focus();
+  styleEditor(); mountTextFrame(); renderPanel(); ta.focus();
   ta.oninput = autosize;
   ta.onkeydown = (e) => {
     if (e.key === "Escape") { closeEditor(); renderPanel(); }
@@ -588,9 +591,9 @@ function styleEditor() {
   const { unit, st, bg, ta } = S.ed, z = S.zoom;
   const b = bg ? bg.rect : unit.bbox;
   const bgc = bg ? bg.color : sampleBg(unit.bbox);
-  const wPt = Math.max(b[2] - b[0], bg ? 0 : 60) + (unit.multi || bg ? 0 : 60);
+  const wPt = Math.max(40, b[2] - b[0]);
   Object.assign(ta.style, {
-    left: b[0] * z - 3 + "px", top: (bg ? b[1] : unit.bbox[1]) * z - 3 + "px", width: wPt * z + 6 + "px",
+    left: b[0] * z - 3 + "px", top: b[1] * z - 3 + "px", width: wPt * z + 6 + "px",
     minHeight: (b[3] - b[1]) * z + 6 + "px",
     fontFamily: fontCss(st), fontSize: st.size * z + "px",
     lineHeight: (unit.pitch * (st.size / unit.style.size)) * z + "px",
@@ -599,13 +602,17 @@ function styleEditor() {
     background: hex(bgc),
   });
   autosize();
+  placeTextFrame();
 }
 function autosize() { const ta = S.ed.ta; ta.style.height = "auto"; ta.style.height = ta.scrollHeight + 2 + "px"; }
-function closeEditor() { if (S.ed) { S.ed.ta.remove(); S.ed = null; } }
+function closeEditor() { if (S.ed) { S.ed.ta.remove(); clearTextFrame(); S.ed = null; } }
 
 async function applyEditor() {
-  const { unit, st, bg, ta } = S.ed;
-  const text = ta.value, page = S.page;
+  const ed = S.ed;
+  const { unit, st, bg } = ed;
+  const text = ed.ta.value, page = S.page;
+  const rect = edRect();
+  const origRect = ed.origRect;
   const opts = {
     text, family: st.family, size: st.size, color: st.color, bold: st.bold, italic: st.italic, align: st.align,
     pitch: unit.pitch * (st.size / unit.style.size),
@@ -615,10 +622,13 @@ async function applyEditor() {
   let result = null;
   const ok = await commit(async () => {
     if (bg) {
-      engine.fillRect(page, bg.rect, bg.color);
-      if (text.trim()) result = await engine.drawText(page, { x: bg.rect[0] + 1, y: bg.rect[1] + st.size * 0.9, width: bg.rect[2] - bg.rect[0] - 2, justify: false, ...opts });
+      engine.fillRect(page, rect, bg.color);
+      if (text.trim()) result = await engine.drawText(page, { x: rect[0] + 1, y: rect[1] + st.size * 0.9, width: Math.max(20, rect[2] - rect[0] - 2), justify: false, ...opts });
     } else if (unit.isNew) {
-      if (text.trim()) result = await engine.drawText(page, { x: unit.x, y: unit.y, ...opts });
+      const w = Math.max(40, Math.min(rect[2] - rect[0], S.size.w - rect[0] - 5));
+      if (text.trim()) result = await engine.drawText(page, { x: rect[0], y: rect[1] + st.size * 0.85, width: w, ...opts });
+    } else if (!close4(unit.bbox, origRect)) {
+      result = await engine.placeText(page, unit, unit.bbox, opts); // déplacé/redimensionné
     } else result = await engine.replaceText(page, unit, opts);
   });
   if (!ok) return;
@@ -718,10 +728,10 @@ function panelDoc() {
     <div class="save-note">Fichier : ${esc(cleanBaseName(S.name))}${S.exportMode === "compact" ? "-compact" : "-modifie"}.pdf</div>`;
 
   const tips = {
-    select: "Cliquez sur un texte pour le modifier, ou sur une image pour la déplacer, la redimensionner, la remplacer ou la supprimer.",
-    addtext: "Cliquez sur la page pour ajouter un texte.",
-    addimage: "Choisissez une image : elle sera placée au centre de la page.",
-    patch: "Pour changer un texte qui fait partie d’une image, tracez un rectangle sur ce texte.",
+    select: "Cliquez sur un texte pour le modifier : déplacez-le avec la poignée ✥, redimensionnez avec les poignées, ou double-cliquez pour éditer. Cliquez sur une image pour la déplacer/redimensionner.",
+    addtext: "Cliquez sur la page pour placer un bloc de texte, saisissez-le, puis déplacez-le (poignée ✥) ou redimensionnez-le (coins = taille de police).",
+    addimage: "Choisissez une image, ou glissez-déposez un fichier image directement sur la page.",
+    patch: "Tracez un rectangle sur le texte aplati dans l'image : l'éditeur s'ouvre avec le texte reconnu (OCR). Corrigez, ajustez le cadre, puis Appliquez.",
   };
   const noText = S.model && !S.model.units.length && S.model.images.length
     ? `<div class="warn">Cette page ne contient pas de texte sélectionnable (image ou scan). Utilisez « Retoucher une image » pour modifier un texte à l’intérieur.</div>` : "";
@@ -871,19 +881,36 @@ function panelImage() {
   $("#ix").onclick = () => { S.sel = null; drawOverlay(); renderPanel(); };
 }
 
+// ---------- import d'images (centre ou glisser-déposer) ----------
+function clientToPage(cx, cy) { const r = ov.getBoundingClientRect(); return [(cx - r.left) / S.zoom, (cy - r.top) / S.zoom]; }
+function imageRectAt(img, cx, cy) {
+  const [px, py] = (cx === undefined) ? [S.size.w / 2, S.size.h / 2] : clientToPage(cx, cy);
+  const w = Math.min(S.size.w * 0.4, img.w * 0.75), h = w * img.h / img.w;
+  const x = Math.max(0, Math.min(S.size.w - w, px - w / 2));
+  const y = Math.max(0, Math.min(S.size.h - h, py - h / 2));
+  return [x, y, x + w, y + h];
+}
+async function addImageFile(file, cx, cy) {
+  const img = await toUsableImage(file);
+  const rect = imageRectAt(img, cx, cy);
+  if (await commit(() => engine.addImage(S.page, img.bytes, rect))) {
+    S.sel = S.model.images.find((i) => close4(i.bbox, rect)) || null;
+    drawOverlay(); renderPanel();
+    toast("Image ajoutée. Déplacez-la, tirez les poignées pour la redimensionner.");
+    return true;
+  }
+  return false;
+}
+
 // ---------- outils ----------
 document.querySelectorAll("#tools button").forEach((b) => b.onclick = async () => {
   if (!S.count) return toast("Ouvrez d'abord un PDF.");
   S.tool = b.dataset.tool; S.sel = null; closeEditor();
   if (S.tool === "addimage") {
     const f = await pickFile($("#fimg")); S.tool = "select";
-    if (f) try {
-      const img = await toUsableImage(f);
-      const w = Math.min(S.size.w * 0.4, img.w * 0.75), h = w * img.h / img.w;
-      const rect = [(S.size.w - w) / 2, (S.size.h - h) / 2, (S.size.w + w) / 2, (S.size.h + h) / 2];
-      await commit(() => engine.addImage(S.page, img.bytes, rect));
-      S.sel = S.model.images.find((i) => close4(i.bbox, rect)) || null; drawOverlay(); renderPanel();
-    } catch (e) { toast("Image non lisible."); }
+    if (f) try { await addImageFile(f); } catch (e) { toast("Image non lisible."); }
+    updateChrome(); drawOverlay(); renderPanel();
+    return;
   }
   updateChrome(); drawOverlay(); renderPanel();
 });
@@ -892,9 +919,9 @@ const ptAt = (e) => { const r = ov.getBoundingClientRect(); return [(e.clientX -
 ov.addEventListener("pointerdown", (e) => {
   if (e.target.id === "ed") return; // clics dans l'éditeur en ligne
   if (S.tool === "patch") {
-    // Ne démarrer un tracé que sur l'overlay nu (pas sur la sélection, les poignées ou la barre d'actions).
+    // Ne démarrer un tracé que sur l'overlay nu (pas sur le cadre, les poignées ou la barre d'actions).
     if (e.target !== ov) return;
-    startRubber(e, (rect) => drawPatchSelection(rect));
+    startRubber(e, (rect) => applyPatchRect(rect)); // une seule étape : on ouvre directement l'éditeur (OCR)
     return;
   }
   if (e.target !== ov && S.tool !== "addtext") return;
@@ -905,6 +932,23 @@ ov.addEventListener("pointerdown", (e) => {
   if (S.tool === "addtext") {
     openEditor(newUnit(x, y + 10)); S.tool = "select"; updateChrome(); return;
   }
+});
+
+// Glisser-déposer une image directement sur la page.
+const stageEl = $("#stage");
+["dragenter", "dragover"].forEach((ev) => stageEl.addEventListener(ev, (e) => {
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
+  e.preventDefault(); stageEl.classList.add("dropzone");
+}));
+["dragleave", "dragend"].forEach((ev) => stageEl.addEventListener(ev, () => stageEl.classList.remove("dropzone")));
+stageEl.addEventListener("drop", async (e) => {
+  e.preventDefault(); stageEl.classList.remove("dropzone");
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  if (!S.count) return toast("Ouvrez d'abord un PDF.");
+  if (!f.type.startsWith("image/")) return toast("Déposez un fichier image (PNG, JPEG…).");
+  if (S.busy) return;
+  try { await addImageFile(f, e.clientX, e.clientY); } catch (err) { toast("Image non lisible."); }
 });
 
 // ---------- navigation, zoom, clavier ----------

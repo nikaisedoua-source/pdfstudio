@@ -25,22 +25,35 @@ Brancher **Tesseract.js (OCR)**, déjà présent dans `vendor/tesseract/` mais j
 utilisé, et **compléter les données de langue manquantes** (le dossier `lang/` était
 vide).
 
-L’outil **« Retoucher une image »** trace un rectangle sur le texte de l’image :
-1. l’utilisateur **trace** un rectangle (rubber-band) ;
-2. il **ajuste** la zone avec **8 poignées de redimensionnement** (déplacement + coins/bords)
-   et **confirme** (« ✓ Appliquer », ou `Ctrl/⌘+Entrée`) ou **annule** (« ✕ Annuler », ou `Échap`) ;
-3. la zone confirmée est rendue à ~300 dpi et **reconnue par OCR** (pré-remplissage du champ) ;
-4. l’utilisateur corrige/traduit le texte reconnu ;
-5. « Appliquer » masque la zone (fond échantillonné) et réécrit le texte par-dessus.
+### Retouche de texte aplati — en une seule étape
+L'outil **« Retoucher une image »** ne demande plus de tracer, ajuster, puis appliquer.
+Le flux est désormais :
+1. l'utilisateur **trace** un rectangle (rubber-band) sur le texte de l'image ;
+2. l'éditeur s'ouvre **immédiatement** ; la zone est rendue à ~300 dpi et **reconnue par
+   OCR** (pré-remplissage du champ) ;
+3. l'utilisateur **corrige/traduit** le texte, **déplace** le bloc (poignée ✥) ou le
+   **redimensionne** (poignées) directement sur la page ;
+4. « Appliquer » (Ctrl/⌘+Entrée) masque la zone (fond échantillonné) et réécrit le texte.
+
+### Éditeur de texte « façon Photoshop » (manipulation directe)
+- Chaque texte actif affiche un **cadre** avec **6 poignées** : les **coins mettent à
+  l'échelle la taille de police**, les poignées **ouest/est** changent la largeur (retour
+  à la ligne), et la **poignée ✥** déplace le bloc.
+- Le texte se **déplace/redimensionne** à la souris, en plus des réglages de l'inspecteur
+  (police, taille, couleur, gras/italique, alignement).
+- Les images s'ajoutent aussi par **glisser-déposer** d'un fichier sur la page.
+- Les **PDF entièrement aplatis** (ex. `Kc.100.pdf` : 0 texte réel, 6 images) se modifient
+  exclusivement par ce mécanisme masquer + réécrire.
 
 ### Fichiers ajoutés / modifiés
 | Fichier | Rôle |
 |---|---|
 | `ocr.js` | **Nouveau.** Chargement paresseux de Tesseract, worker local, `recognize(canvas, lang)`. |
-| `vendor/tesseract/lang/{fra,eng,rus}.traineddata.gz` | **Nouveau.** Données de langue (téléchargées depuis `@tesseract.js-data`). |
-| `app.js` | Import de `ocr.js` ; `renderRect()` (rendu haute densité d’un rectangle) ; `ocrInto()` (OCR + pré-remplissage) ; branché sur l’outil `patch` ; sélecteur de langue + bouton « Reconnaître (OCR) » dans le panneau. |
-| `index.html` | CSP : ajout de `worker-src 'self' blob:` (requis par le worker Tesseract). |
-| `sw.js` | Ajout de `ocr.js` au précache ; **cache runtime** des requêtes GET same-origin (l’OCR est ainsi disponible hors ligne après une 1re utilisation). Version de cache → `v8`. |
+| `vendor/tesseract/lang/{fra,eng,rus}.traineddata.gz` | **Nouveau.** Données de langue (depuis `@tesseract.js-data`). |
+| `app.js` | `renderRect()` (rendu ~300 dpi), `ocrInto()` (OCR + pré-remplissage), **cadre de texte** (`mountTextFrame`/`placeTextFrame` : poignée ✥ + 6 poignées), **retouche 1 étape** (`applyPatchRect` appelé directement), **glisser-déposer d'images** (`addImageFile`), `applyEditor` (déplacement/redimensionnement via `engine.placeText`). |
+| `engine.js` | **`placeText()`** : rédacte l'ancien emplacement puis redessine le texte dans un nouveau rect (déplacement/redimensionnement de texte existant). |
+| `index.html` | CSP : `worker-src 'self' blob:` ; CSS du cadre de texte (`.text-frame`, `.tf-grip`) et de la zone de dépôt (`#stage.dropzone`). |
+| `sw.js` | `ocr.js` au précache ; **cache runtime** (OCR hors ligne après 1re utilisation). Version de cache → `v9`. |
 | `package.json` | `ocr.js` ajouté au `build` ; version → `1.3.1`. |
 
 ## Pourquoi ces choix
@@ -73,11 +86,14 @@ L’outil **« Retoucher une image »** trace un rectangle sur le texte de l’i
   texturé, ajuster « Couleur du fond (masque) » dans le panneau.
 
 ## Pour les prochains développeurs
-- Le point d’entrée OCR est `ocr.js` → `recognize(canvas, lang)`.
-- Le point d’intégration UI est dans `app.js` : `startRubber()` (tracé) →
-  `drawPatchSelection()` (sélection redimensionnable + barre d’actions) →
-  `applyPatchRect()` (masque + éditeur) → `ocrInto(rect, token)` (OCR + pré-remplissage).
-  Le handler `pointerdown` de l’overlay route l’outil `patch` vers `startRubber`.
+- Le point d'entrée OCR est `ocr.js` → `recognize(canvas, lang)`.
+- Retouche de texte aplati : `startRubber()` (tracé) → `applyPatchRect()` (masque + éditeur
+  + OCR) → `ocrInto(rect, token)` (pré-remplissage). Le handler `pointerdown` de l'overlay
+  route l'outil `patch` vers `startRubber`.
+- Éditeur « Photoshop » : `mountTextFrame()` / `placeTextFrame()` (poignée ✥ + 6 poignées),
+  `applyEditor()` (bg → `fillRect`+`drawText` ; nouveau → `drawText` ; existant déplacé →
+  `engine.placeText`, sinon `engine.replaceText`).
+- Images : `addImageFile()` (bouton ou glisser-déposer), `imageRectAt()`.
 - Ne **pas** re-télécharger les `traineddata` à chaque build : ils sont versionnés dans
   `vendor/tesseract/lang/`.
-- Après modif de `sw.js`, incrémenter `CACHE` (`v8` → `v9`…) pour forcer la mise à jour.
+- Après modif de `sw.js`, incrémenter `CACHE` (`v9` → `v10`…) pour forcer la mise à jour.

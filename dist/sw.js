@@ -1,6 +1,6 @@
 // Précache uniquement l’application; le préfixe évite d’effacer les caches d’autres sites.
 const CACHE_PREFIX = "pdfstudio-";
-const CACHE = `${CACHE_PREFIX}v8`;
+const CACHE = `${CACHE_PREFIX}v9`;
 const FILES = [
   "./", "index.html", "app.js", "engine.js", "ocr.js", "manifest.webmanifest", "icon-192.png", "icon-512.png",
   "vendor/mupdf.js", "vendor/mupdf-wasm.js", "vendor/mupdf-wasm.wasm",
