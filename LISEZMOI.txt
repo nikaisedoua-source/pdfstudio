@@ -1,0 +1,68 @@
+PDF STUDIO — version 1.3
+=======================
+
+Ce que fait le logiciel
+- Ouvre un PDF et vous laisse cliquer sur n'importe quel texte pour le modifier (police, taille, couleur, gras, italique, alignement).
+  Les paragraphes sont recalculés (retours à la ligne, texte justifié) pour que la mise en page ne se déforme pas.
+  La police d'origine embarquée est réutilisée quand elle contient les caractères saisis; sinon une police
+  de substitution compatible est appliquée et signalée.
+- Images : déplacer, redimensionner, remplacer, supprimer, ajouter.
+- « Texte dans une image » : tracez un rectangle sur un texte qui fait partie d'une image, il est recouvert
+  avec la couleur du fond et vous écrivez le nouveau texte (idéal sur fond uni).
+- Pages : rotation ±90°, duplication, suppression, déplacement, insertion d'un autre PDF (fusion) et extraction
+  d'une page dans un nouveau PDF.
+- Formulaires : détection des champs, saisie du texte, cases à cocher et listes déroulantes, puis export avec
+  les valeurs enregistrées.
+- Métadonnées : titre, auteur, sujet et mots-clés modifiables sans perdre les autres informations du document.
+- Panneau « Intégrité du document » : chiffrement, réparations éventuelles, pièces jointes, annotations, champs,
+  liens, version PDF, producteur et créateur.
+- PDF protégés : l'application demande le mot de passe, le garde en mémoire pour cette session seulement et
+  réexporte un fichier qui reste chiffré.
+- Deux modes d'export :
+  • Fidélité (par défaut) : conserve la structure, les objets, les pièces jointes, les métadonnées et le
+    chiffrement; seuls les objets devenus inutiles sont retirés pour éviter que le texte supprimé reste
+    lisible dans le fichier.
+  • Compact : compacte et renumérote les objets pour réduire le poids du fichier.
+- Annuler / Rétablir, zoom, plusieurs pages, enregistrement du PDF modifié.
+- Les PDF ne sont pas téléversés et ne sont pas ajoutés au cache hors ligne de l'application.
+- L'import vérifie la signature PDF et refuse les fichiers de plus de 200 Mio. Un avertissement apparaît au-delà de 80 Mio.
+- Images ajoutées : maximum 40 Mio et 32 mégapixels. Le rendu et l'historique undo/redo ont aussi des limites de mémoire.
+- L'original n'est jamais écrasé : l'export télécharge une copie suffixée « -modifie.pdf ».
+- Les changements non enregistrés sont signalés avant le remplacement du document ou la fermeture de la page.
+
+Comment l'utiliser
+Option A — sur votre ordinateur (Windows / Mac / Linux)
+  1. Installez Python (python.org) si ce n'est pas déjà fait.
+  2. Windows : double-cliquez sur Lancer-Windows.bat   |   Mac/Linux : exécutez Lancer-Mac-Linux.sh
+  3. Le navigateur s'ouvre sur http://localhost:8765. Le serveur local écoute uniquement sur 127.0.0.1.
+
+Option B — en ligne, pour tous vos appareils (recommandé)
+  1. Allez sur app.netlify.com/drop (ou Cloudflare Pages, GitHub Pages).
+  2. Glissez-y le dossier « editeur-pdf » : vous obtenez une adresse web.
+  3. Ouvrez cette adresse sur Android, iPhone, Mac, Windows ou Linux, puis choisissez
+     « Installer l'application » / « Ajouter à l'écran d'accueil ». Après le premier chargement, les fichiers statiques de l'application sont disponibles hors ligne.
+  4. Le cache est versionné et limité à PDF Studio. Les PDF ouverts ne sont pas mis en cache.
+
+Tests
+- Avec Node.js, exécutez `npm run check`.
+- Cette commande vérifie la syntaxe JavaScript, lance le test d'intégration sur `tests/fixtures/smoke.pdf`, puis construit `dist/`.
+- La fixture couvre : refus d'une signature invalide, ouverture d'un PDF de trois pages, extraction et rendu,
+  réutilisation de la police d'origine, suppression réelle du texte remplacé (aucune copie résiduelle dans le
+  fichier exporté), métadonnées et pièce jointe conservées en export fidélité et compact, opérations de pages,
+  détection et saisie d'un formulaire, chiffrement par mot de passe, réouverture des exports, suppression d'image.
+
+Limites de cette version
+- Édition et ajout testés en alphabet latin et cyrillique (russe). Arabe, chinois, hindi et autres écritures complexes ne sont pas encore pris en charge.
+- Pas encore de reconnaissance automatique du texte dans les images (OCR) ni de PDF scannés modifiables directement.
+- Les polices de remplacement sont Times/Arial/Calibri-compatibles ; la police d'origine est conservée telle quelle
+  pour tout ce que vous ne modifiez pas.
+- Les formulaires sont remplis (texte, cases à cocher, listes) mais leur structure n'est pas créée ni modifiée.
+- Un PDF chiffré avec un mot de passe d'ouverture ne peut pas être édité sans ce mot de passe; l'application ne casse pas le chiffrement.
+- Le moteur MuPDF s'exécute dans le navigateur. Les gros documents peuvent ralentir l'interface; l'exécution de MuPDF dans un Web Worker reste une amélioration ultérieure recommandée.
+- La signature de fichier aide à refuser les mauvais formats, mais ne constitue pas un antivirus. N'ouvrez pas de PDF provenant d'une source à laquelle vous ne faites pas confiance.
+- L'outil « Texte dans une image » masque la zone puis écrit dessus; ce n'est pas un véritable caviardage garantissant la suppression des pixels source.
+
+Licences
+- Moteur PDF : MuPDF (Artifex), licence AGPL-3.0. Si vous distribuez ou vendez ce logiciel, vous devez publier son
+  code source sous AGPL ou acheter une licence commerciale à Artifex.
+- Polices : Liberation (SIL OFL) et Carlito (SIL OFL).

@@ -1,0 +1,15 @@
+{
+  "name": "Éditeur PDF",
+  "short_name": "Éditeur PDF",
+  "description": "Modifiez les textes et les images de vos PDF sans déformer la mise en page.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#e9edf2",
+  "theme_color": "#1f3a5f",
+  "lang": "fr",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
