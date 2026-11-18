@@ -6,12 +6,14 @@ const WIN = {0x20AC:0x80,0x201A:0x82,0x0192:0x83,0x201E:0x84,0x2026:0x85,0x2020:
 export const FAMILIES = {
   serif:   { label: "Serif (Times)",    files: ["LiberationSerif-Regular","LiberationSerif-Bold","LiberationSerif-Italic","LiberationSerif-BoldItalic"], css: "'Liberation Serif', 'Times New Roman', serif" },
   sans:    { label: "Sans (Arial)",     files: ["LiberationSans-Regular","LiberationSans-Bold","LiberationSans-Italic","LiberationSans-BoldItalic"],     css: "'Liberation Sans', Arial, sans-serif" },
+  arialblack: { label: "Arial Black",  files: ["ArchivoBlack-Regular","ArchivoBlack-Regular","ArchivoBlack-Regular","ArchivoBlack-Regular"],               css: "'Arial Black', 'Archivo Black', 'Liberation Sans', sans-serif" },
   carlito: { label: "Calibri",          files: ["Carlito-Regular","Carlito-Bold","Carlito-Italic","Carlito-BoldItalic"],                                   css: "Carlito, Calibri, sans-serif" },
   mono:    { label: "Mono (Courier)",   files: ["LiberationMono-Regular","LiberationMono-Bold","LiberationMono-Regular","LiberationMono-Bold"],           css: "'Liberation Mono', 'Courier New', monospace" },
 };
 
 export function guessFamily(fontName = "") {
   const n = fontName.toLowerCase();
+  if (/arial[\s-]*black|archivo[\s-]*black/.test(n)) return "arialblack";
   if (/calibri|carlito/.test(n)) return "carlito";
   if (/mono|courier|consol/.test(n)) return "mono";
   if (/times|serif|garamond|georgia|cambria|palatino|book|minion/.test(n) && !/sans/.test(n)) return "serif";
@@ -215,21 +217,15 @@ export class Engine {
             bold: font.isBold(), italic: font.isItalic(), serif: font.isSerif(), mono: font.isMono(),
             family: guessFamily(fontName),
           });
-          // CORRECTION: Assigner le style même pour les espaces seuls, pour détecter tous les blocs
-          if (ln.style === null) { ln.x = origin[0]; ln.y = origin[1]; ln.style = style; ln.size = size; }
-          else if (c.trim() !== "" &&
+          if (ln.style === null && c.trim() !== "") { ln.x = origin[0]; ln.y = origin[1]; ln.style = style; ln.size = size; }
+          else if (ln.style && c.trim() !== "" &&
             (Math.abs(ln.style.size - size) > 0.3 || ln.style.font !== style.font || ln.style.color.join() !== style.color.join())) ln.mixed = true;
           ln.text += c;
           if (ln.size === null) ln.size = size;
           const q = _q ? quadRect(_q) : [origin[0], origin[1], origin[0] + size * 0.5, origin[1] + size];
           ln.glyphs.push({ c, quad: [..._q], rect: q, origin: [...origin], size, font: fontName });
         },
-        endLine: () => { 
-          ln.text = ln.text.replace(/\s+$/, ""); 
-          // CORRECTION: Accepter les lignes avec style même si le texte est vide après trim
-          if (ln.style) blk.lines.push(ln); 
-          ln = null; 
-        },
+        endLine: () => { ln.text = ln.text.replace(/\s+$/, ""); if (ln.style && ln.text.trim()) blk.lines.push(ln); ln = null; },
         endTextBlock: () => { if (blk.lines.length) blocks.push(blk); blk = null; },
       });
 
@@ -299,8 +295,6 @@ export class Engine {
       prev = l;
     }
     if (cur !== null) paras.push(cur);
-    // CORRECTION: Toujours créer au moins un paragraphe, même si vide
-    if (paras.length === 0) paras.push("");
 
     const glyphs = lines.flatMap((l) => l.glyphs).filter((g) => g.c.trim() !== "" && g.rect[2] > g.rect[0] && g.rect[3] > g.rect[1]);
 

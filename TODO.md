@@ -49,5 +49,5 @@
 ## À faire
 - [ ] Exécuter MuPDF dans un Web Worker pour éviter que l’analyse et le rendu de PDF volumineux bloquent le fil principal.
 - [ ] Ajouter des tests dédiés sur écrans mobiles, scans sans texte extractible et pages de dimensions inhabituelles.
-- [ ] Ajouter OCR/retouche de texte pour les textes incorporés à des images. Sur `Kc.102.pdf`, le texte de l’affiche à droite et de la capture de téléphone reste français car il est aplati dans les images.
+- [x] Ajouter OCR/retouche de texte pour les textes incorporés à des images. Sur `Kc.102.pdf`, le texte de l’affiche à droite et de la capture de téléphone reste français car il est aplati dans les images. → **FAIT en v1.3.1** : OCR Tesseract local (fra/eng/rus) intégré à l’outil « Retoucher une image » ; la zone tracée est reconnue et pré-remplie. Voir `CORRECTIONS_OCR.md`.
 - [ ] Créer ou modifier la structure des formulaires (ajout de champs); la version actuelle les remplit seulement.

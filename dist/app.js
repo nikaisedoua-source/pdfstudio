@@ -1,4 +1,5 @@
 import { Engine, FAMILIES } from "./engine.js";
+import { recognize } from "./ocr.js";
 
 const $ = (s) => document.querySelector(s);
 const engine = new Engine(async (f) => new Uint8Array(await (await fetch("fonts/" + f)).arrayBuffer()));
@@ -12,7 +13,7 @@ const WARN_PDF_BYTES = 80 * 1024 * 1024;
 const MAX_HISTORY_BYTES = 256 * 1024 * 1024;
 
 const S = {
-  page: 0, count: 0, zoom: 1, tool: "select", name: "document",
+  page: 0, count: 0, zoom: 1, tool: "select", name: "document", ocrLang: "fra",
   size: null, model: null, sel: null, ed: null,
   undo: [], redo: [], stateId: 0, savedStateId: 0, stateSeq: 0, busy: false, docToken: 0,
   info: null, metadata: null, widgets: [], pageMeta: null, exportMode: "fidelity",
@@ -423,6 +424,145 @@ function sampleBg(rect) {
   return [med(0), med(1), med(2)];
 }
 
+// Rend un rectangle de la page (coordonnées PDF pt, origine haut-gauche) en canevas haute résolution pour l'OCR.
+// La page est rendue à une échelle suffisante pour que la zone fasse au moins ~300 dpi.
+function renderRect(rect, targetDpi = 300) {
+  const [x0, y0, x1, y1] = rect;
+  const wPt = Math.max(1, x1 - x0), hPt = Math.max(1, y1 - y0);
+  const scale = Math.min(6, Math.max(2, targetDpi / 72));
+  const full = safeRenderScale(S.size, scale);
+  const r = engine.render(S.page, full);
+  const kx = r.width / S.size.w, ky = r.height / S.size.h;
+  const sx = Math.max(0, Math.floor(x0 * kx)), sy = Math.max(0, Math.floor(y0 * ky));
+  const sw = Math.max(1, Math.min(r.width - sx, Math.ceil(wPt * kx)));
+  const sh = Math.max(1, Math.min(r.height - sy, Math.ceil(hPt * ky)));
+  const src = document.createElement("canvas"); src.width = r.width; src.height = r.height;
+  src.getContext("2d").putImageData(new ImageData(r.pixels, r.width, r.height), 0, 0);
+  const out = document.createElement("canvas"); out.width = sw; out.height = sh;
+  const ctx = out.getContext("2d");
+  // fond blanc (les PDF transparents rendent du noir sinon) pour améliorer la reconnaissance
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, sw, sh);
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  return out;
+}
+
+// OCR Asynchrone d'un rectangle : remplit le textarea s'il est resté vide (l'utilisateur n'a rien saisi).
+async function ocrInto(rect, token) {
+  try {
+    const canvas = renderRect(rect, 300);
+    const { text, confidence } = await recognize(canvas, S.ocrLang);
+    if (S.ed !== token || !S.ed || S.ed.ta !== token.ta) return; // éditeur fermé/changé
+    if (token.ta.value.trim() !== "") return; // l'utilisateur a déjà saisi du texte : on respecte
+    if (text && text.trim()) {
+      token.ta.value = text;
+      autosize();
+      if (confidence && confidence < 55) toast(`Texte reconnu (confiance ${Math.round(confidence)} %). Vérifiez puis appliquez.`);
+      else toast("Texte reconnu. Vérifiez puis appliquez.");
+    } else {
+      toast("Aucun texte reconnu dans cette zone. Saisissez-le manuellement.");
+    }
+  } catch (e) {
+    console.error("Échec OCR :", e);
+    toast("La reconnaissance de texte a échoué. Saisissez le texte manuellement.");
+  }
+}
+
+// ---------- Retouche d'un texte dans une image (Outil « patch ») ----------
+
+// Raye la zone et prépare l'éditeur de remplacement (fond échantillonné + OCR de pré-remplissage).
+function applyPatchRect(rect) {
+  const color = sampleBg(rect), h = Math.max(1, rect[3] - rect[1]);
+  const unit = newUnit(rect[0] + 1, rect[1] + h * 0.8);
+  unit.style.size = Math.max(6, Math.min(48, Math.round(h * 0.8)));
+  unit.style.color = lum(color) > 0.55 ? [0.05, 0.05, 0.05] : [1, 1, 1];
+  unit.bbox = rect; unit.width = rect[2] - rect[0]; unit.pitch = unit.style.size * 1.2;
+  openEditor(unit, { rect, color });
+  const token = S.ed;
+  if (token) { toast("Reconnaissance du texte en cours…"); ocrInto(rect, token); }
+}
+
+// Tracé initial d'un rectangle (rubber-band). Appelle onDone(rect) si la zone est valide.
+function startRubber(e, onDone) {
+  e.preventDefault();
+  const rb = document.createElement("div"); rb.className = "rubber"; ov.append(rb);
+  const start = ptAt(e);
+  const draw = (p) => box(rb, [Math.min(start[0], p[0]), Math.min(start[1], p[1]), Math.max(start[0], p[0]), Math.max(start[1], p[1])]);
+  const mv = (m) => draw(ptAt(m));
+  const up = (m) => {
+    removeEventListener("pointermove", mv); removeEventListener("pointerup", up); rb.remove();
+    const p = ptAt(m);
+    const rect = [Math.min(start[0], p[0]), Math.min(start[1], p[1]), Math.max(start[0], p[0]), Math.max(start[1], p[1])];
+    if (rect[2] - rect[0] < 6 || rect[3] - rect[1] < 6) { toast("Tracez un rectangle plus grand autour du texte."); return; }
+    onDone(rect);
+  };
+  addEventListener("pointermove", mv); addEventListener("pointerup", up);
+}
+
+// Affiche un rectangle redimensionnable (8 poignées) + barre d'actions. L'utilisateur ajuste la forme, puis applique.
+function drawPatchSelection(rect) {
+  closeEditor();
+  let cur = rect.slice();
+  const el = document.createElement("div"); el.className = "sel patch-sel"; ov.append(el);
+  const bar = document.createElement("div"); bar.className = "patch-actions";
+  bar.innerHTML = `<button class="primary" data-act="apply" title="Appliquer la retouche (Ctrl+Entrée)">✓ Appliquer</button><button data-act="cancel" title="Annuler (Échap)">✕ Annuler</button>`;
+  ov.append(bar);
+
+  const MIN = 8;
+  const clamp = (r) => {
+    let [a, b, c, d] = r;
+    const W = S.size.w, H = S.size.h;
+    a = Math.max(0, Math.min(W - MIN, a)); c = Math.max(a + MIN, Math.min(W, Math.max(c, a + MIN)));
+    b = Math.max(0, Math.min(H - MIN, b)); d = Math.max(b + MIN, Math.min(H, Math.max(d, b + MIN)));
+    return [a, b, c, d];
+  };
+  const place = () => {
+    box(el, cur);
+    const z = S.zoom, cx = (cur[0] + cur[2]) / 2 * z;
+    let top = cur[1] * z - 46; if (top < 4) top = cur[3] * z + 8;
+    bar.style.left = cx + "px"; bar.style.top = top + "px";
+  };
+  place();
+
+  const startDrag = (e, mode) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.stopPropagation(); e.preventDefault();
+    const start = ptAt(e), orig = cur.slice();
+    const move = (ev) => {
+      const p = ptAt(ev), dx = p[0] - start[0], dy = p[1] - start[1];
+      let [a, b, c, d] = orig;
+      if (mode === "move") { a += dx; c += dx; b += dy; d += dy; }
+      else {
+        if (mode.includes("w")) a += dx; if (mode.includes("e")) c += dx;
+        if (mode.includes("n")) b += dy; if (mode.includes("s")) d += dy;
+      }
+      cur = clamp([a, b, c, d]); place();
+    };
+    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
+    addEventListener("pointermove", move); addEventListener("pointerup", up);
+  };
+
+  el.onpointerdown = (e) => startDrag(e, "move");
+  const handles = { nw: [0, 0], n: [0.5, 0], ne: [1, 0], e: [1, 0.5], se: [1, 1], s: [0.5, 1], sw: [0, 1], w: [0, 0.5] };
+  for (const [mode, [fx, fy]] of Object.entries(handles)) {
+    const h = document.createElement("i");
+    Object.assign(h.style, { left: `calc(${fx * 100}% - 7px)`, top: `calc(${fy * 100}% - 7px)`, cursor: mode + "-resize" });
+    h.onpointerdown = (e) => startDrag(e, mode); el.append(h);
+  }
+
+  const cleanup = () => {
+    removeEventListener("keydown", onKey, true);
+    el.remove(); bar.remove();
+  };
+  const onKey = (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); cleanup(); }
+    else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); ev.stopPropagation(); const r = cur.slice(); cleanup(); applyPatchRect(r); }
+  };
+  addEventListener("keydown", onKey, true);
+
+  bar.querySelector('[data-act="apply"]').onclick = () => { const r = cur.slice(); cleanup(); applyPatchRect(r); };
+  bar.querySelector('[data-act="cancel"]').onclick = () => cleanup();
+}
+
 function openEditor(unit, bg = null) {
   closeEditor();
   const st = { ...unit.style, align: unit.align };
@@ -669,7 +809,9 @@ function panelText() {
   ${unit.style.origFont ? `<div class="note">Police d'origine : ${esc(unit.style.origFont.replace(/^[A-Z]{6}\+/, ""))}${usingOriginal ? " — réutilisée à l’identique." : " — remplacée par une police de substitution."}</div>` : ""}
   <div class="row"><div><label>Taille (pt)</label><input id="ps" type="number" min="3" max="200" step="0.5" value="${+st.size.toFixed(1)}"></div>
   <div><label>Couleur</label><input id="pc" type="color" value="${hex(st.color)}"></div></div>
-  ${bg ? `<label>Couleur du fond (masque)</label><input id="pb" type="color" value="${hex(bg.color)}">` : ""}
+  ${bg ? `<label>Couleur du fond (masque)</label><input id="pb" type="color" value="${hex(bg.color)}">
+  <div class="row" style="margin-top:10px"><div><label>Langue de reconnaissance</label><select id="poml"><option value="fra" ${S.ocrLang === "fra" ? "selected" : ""}>Français</option><option value="eng" ${S.ocrLang === "eng" ? "selected" : ""}>Anglais</option><option value="rus" ${S.ocrLang === "rus" ? "selected" : ""}>Russe</option></select></div>
+  <div style="display:flex;align-items:flex-end"><button class="wide" id="pomr" title="Relancer la reconnaissance optique de la zone">↻ Reconnaître (OCR)</button></div></div>` : ""}
   <div class="row" style="margin-top:10px"><button id="pB" class="${st.bold ? "on" : ""}" title="Gras (substitution)"><b>G</b></button><button id="pI" class="${st.italic ? "on" : ""}" title="Italique (substitution)"><i>I</i></button>
   <button data-al="left" class="${st.align === "left" ? "on" : ""}">⟸</button><button data-al="center" class="${st.align === "center" ? "on" : ""}">↔</button><button data-al="right" class="${st.align === "right" ? "on" : ""}">⟹</button></div>
   <div class="stack"><button class="primary" id="pa">Appliquer (Ctrl+Entrée)</button><button id="px">Annuler (Échap)</button>
@@ -691,6 +833,14 @@ function panelText() {
   $("#ps").oninput = (e) => { st.size = Math.max(3, Math.min(200, +e.target.value || st.size)); e.target.value = st.size; styleEditor(); };
   $("#pc").oninput = (e) => { st.color = unhex(e.target.value); styleEditor(); };
   if (bg) $("#pb").oninput = (e) => { bg.color = unhex(e.target.value); styleEditor(); };
+  if (bg) {
+    $("#poml").onchange = (e) => { S.ocrLang = e.target.value; };
+    $("#pomr").onclick = () => {
+      const token = S.ed;
+      toast("Reconnaissance du texte en cours…");
+      ocrInto(bg.rect, token);
+    };
+  }
   $("#pB").onclick = () => { st.bold = !st.bold; st.fontKey = null; panelText(); styleEditor(); };
   $("#pI").onclick = () => { st.italic = !st.italic; st.fontKey = null; panelText(); styleEditor(); };
   panel.querySelectorAll("[data-al]").forEach((b) => b.onclick = () => { st.align = b.dataset.al; panelText(); styleEditor(); });
@@ -740,30 +890,20 @@ document.querySelectorAll("#tools button").forEach((b) => b.onclick = async () =
 
 const ptAt = (e) => { const r = ov.getBoundingClientRect(); return [(e.clientX - r.left) / S.zoom, (e.clientY - r.top) / S.zoom]; };
 ov.addEventListener("pointerdown", (e) => {
-  if (e.target !== ov && !(S.tool === "patch" || S.tool === "addtext")) return;
+  if (e.target.id === "ed") return; // clics dans l'éditeur en ligne
+  if (S.tool === "patch") {
+    // Ne démarrer un tracé que sur l'overlay nu (pas sur la sélection, les poignées ou la barre d'actions).
+    if (e.target !== ov) return;
+    startRubber(e, (rect) => drawPatchSelection(rect));
+    return;
+  }
+  if (e.target !== ov && S.tool !== "addtext") return;
   if (S.tool === "select") { if (e.target === ov && (S.sel || S.ed)) { S.sel = null; closeEditor(); drawOverlay(); renderPanel(); } return; }
   if (e.target.id === "ed") return;
   e.preventDefault();
   const [x, y] = ptAt(e);
   if (S.tool === "addtext") {
     openEditor(newUnit(x, y + 10)); S.tool = "select"; updateChrome(); return;
-  }
-  if (S.tool === "patch") {
-    closeEditor();
-    const rb = document.createElement("div"); rb.className = "rubber"; ov.append(rb);
-    const mv = (m) => { const [x2, y2] = ptAt(m); box(rb, [Math.min(x, x2), Math.min(y, y2), Math.max(x, x2), Math.max(y, y2)]); };
-    const up = (m) => {
-      removeEventListener("pointermove", mv); removeEventListener("pointerup", up); rb.remove();
-      const [x2, y2] = ptAt(m), rect = [Math.min(x, x2), Math.min(y, y2), Math.max(x, x2), Math.max(y, y2)];
-      if (rect[2] - rect[0] < 6 || rect[3] - rect[1] < 6) return;
-      const color = sampleBg(rect), h = rect[3] - rect[1];
-      const unit = newUnit(rect[0] + 1, rect[1] + h * 0.8);
-      unit.style.size = Math.max(6, Math.min(48, Math.round(h * 0.8)));
-      unit.style.color = lum(color) > 0.55 ? [0.05, 0.05, 0.05] : [1, 1, 1];
-      unit.bbox = rect; unit.width = rect[2] - rect[0]; unit.pitch = unit.style.size * 1.2;
-      openEditor(unit, { rect, color });
-    };
-    addEventListener("pointermove", mv); addEventListener("pointerup", up);
   }
 });
 
